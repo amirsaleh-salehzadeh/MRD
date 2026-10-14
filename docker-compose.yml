@@ -1,0 +1,62 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: mrd_orders
+      POSTGRES_USER: mrd
+      POSTGRES_PASSWORD: mrd-local
+    ports:
+      - target: 5432
+        protocol: tcp
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mrd -d mrd_orders"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  setup:
+    build: .
+    command: ["python", "-m", "scripts.seed"]
+    environment:
+      DATABASE_URL: postgresql+psycopg2://mrd:mrd-local@db:5432/mrd_orders
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      DATABASE_URL: postgresql+psycopg2://mrd:mrd-local@db:5432/mrd_orders
+      POLL_INTERVAL_SECONDS: "1.0"
+      WORKER_BATCH_SIZE: "25"
+    ports:
+      - "8000:8000"
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    environment:
+      DATABASE_URL: postgresql+psycopg2://mrd:mrd-local@db:5432/mrd_orders
+      POLL_INTERVAL_SECONDS: "1.0"
+      WORKER_BATCH_SIZE: "25"
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

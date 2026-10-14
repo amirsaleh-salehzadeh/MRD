@@ -1,0 +1,70 @@
+{
+  "info": {
+    "_postman_id": "073b88dc-1589-4b96-bf0b-40f8b61abed6",
+    "name": "Mr D Orders & Stock API",
+    "description": "Run in order with Docker Compose. The collection creates a fresh order reference and checks success, duplicate, validation, not-found, stock, report, and error responses.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000" },
+    { "key": "orderRef", "value": "" },
+    { "key": "reportDate", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/health" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('API and database are healthy', function () {", "    pm.response.to.have.status(200);", "    pm.expect(pm.response.json().status).to.eql('ok');", "});"] } }]
+    },
+    {
+      "name": "Create order",
+      "event": [{ "listen": "prerequest", "script": { "type": "text/javascript", "exec": ["pm.collectionVariables.set('orderRef', 'postman-' + pm.variables.replaceIn('{{$guid}}'));", "pm.collectionVariables.set('reportDate', new Date().toISOString().slice(0, 10));"] } }, { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('New order is accepted and priced by the server', function () {", "    pm.response.to.have.status(202);", "    const body = pm.response.json();", "    pm.expect(body.order_ref).to.eql(pm.collectionVariables.get('orderRef'));", "    pm.expect(body.total_cents).to.eql(498);", "    pm.expect(body.duplicate).to.eql(false);", "    pm.collectionVariables.set('orderId', body.order_id);", "});"] } }],
+      "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"order_ref\": \"{{orderRef}}\",\n  \"customer_id\": \"postman-customer\",\n  \"items\": [\n    { \"sku\": \"BAN-001\", \"qty\": 1 },\n    { \"sku\": \"APL-003\", \"qty\": 1 }\n  ]\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/orders" }
+    },
+    {
+      "name": "Repeat identical order (idempotency)",
+      "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"order_ref\": \"{{orderRef}}\",\n  \"customer_id\": \"postman-customer\",\n  \"items\": [\n    { \"sku\": \"BAN-001\", \"qty\": 1 },\n    { \"sku\": \"APL-003\", \"qty\": 1 }\n  ]\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/orders" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Identical retry returns existing order without creating another', function () {", "    pm.response.to.have.status(200);", "    const body = pm.response.json();", "    pm.expect(body.duplicate).to.eql(true);", "    pm.expect(body.order_id).to.eql(pm.collectionVariables.get('orderId'));", "});"] } }]
+    },
+    {
+      "name": "Changed duplicate payload (409)",
+      "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"order_ref\": \"{{orderRef}}\",\n  \"customer_id\": \"postman-customer\",\n  \"items\": [{ \"sku\": \"BAN-001\", \"qty\": 2 }]\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/orders" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Changed duplicate is rejected as a conflict', function () {", "    pm.response.to.have.status(409);", "});"] } }]
+    },
+    {
+      "name": "Get order",
+      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/orders/{{orderRef}}" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Order details contain snapshot totals and status', function () {", "    pm.response.to.have.status(200);", "    const body = pm.response.json();", "    pm.expect(body.total_cents).to.eql(498);", "    pm.expect(body.items).to.have.length(2);", "    pm.expect(body.status).to.be.oneOf(['PENDING_STOCK', 'STOCK_UPDATED']);", "});"] } }]
+    },
+    {
+      "name": "Get BAN-001 stock",
+      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/products/BAN-001/stock" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Stock lookup returns a nonnegative integer', function () {", "    pm.response.to.have.status(200);", "    const body = pm.response.json();", "    pm.expect(body.sku).to.eql('BAN-001');", "    pm.expect(body.stock).to.be.a('number').and.to.be.at.least(0);", "});"] } }]
+    },
+    {
+      "name": "Daily report",
+      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/reports/daily?date={{reportDate}}" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Daily report has accepted-order and stock fields', function () {", "    pm.response.to.have.status(200);", "    const body = pm.response.json();", "    pm.expect(body).to.have.property('accepted_orders');", "    pm.expect(body).to.have.property('revenue_cents');", "    pm.expect(body).to.have.property('units_sold_per_sku');", "    pm.expect(body).to.have.property('current_stock_per_sku');", "});"] } }]
+    },
+    {
+      "name": "Unknown SKU (422)",
+      "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"order_ref\": \"{{orderRef}}-unknown\",\n  \"customer_id\": \"postman-customer\",\n  \"items\": [{ \"sku\": \"NO-SUCH-SKU\", \"qty\": 1 }]\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/orders" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Unknown SKU is a client error and does not create an order', function () {", "    pm.response.to.have.status(422);", "    pm.expect(pm.response.json().detail).to.include('Unknown SKU');", "});"] } }]
+    },
+    {
+      "name": "Invalid quantity (422)",
+      "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"order_ref\": \"{{orderRef}}-invalid\",\n  \"customer_id\": \"postman-customer\",\n  \"items\": [{ \"sku\": \"BAN-001\", \"qty\": 0 }]\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/orders" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Invalid request shape is rejected by validation', function () {", "    pm.response.to.have.status(422);", "});"] } }]
+    },
+    {
+      "name": "Missing order (404)",
+      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/orders/{{orderRef}}-missing" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Missing order returns 404', function () {", "    pm.response.to.have.status(404);", "});"] } }]
+    },
+    {
+      "name": "Missing product (404)",
+      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/products/NO-SUCH-SKU/stock" },
+      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Missing product returns 404', function () {", "    pm.response.to.have.status(404);", "});"] } }]
+    }
+  ]
+}
