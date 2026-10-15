@@ -1,6 +1,6 @@
 import sys
 
-from app.db import initialize_database
+from app.db.session import initialize_database
 from scripts.cli import run_cli
 
 

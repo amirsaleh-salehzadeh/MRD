@@ -5,8 +5,9 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import Order, OrderItem, OutboxEvent, Product
+from app.db.models import Order, OrderItem, OutboxEvent, Product
 from app.schemas import OrderCreate
+from app.orders.repository import get_order
 
 
 class DuplicatePayloadConflict(Exception):
@@ -120,9 +121,3 @@ def create_order(session: Session, request: OrderCreate) -> tuple[Order, bool]:
     if result_order is None:
         raise RuntimeError("Order transaction committed without returning the created order")
     return result_order, False
-
-
-def get_order(session: Session, order_ref: str) -> Order | None:
-    return session.scalar(
-        select(Order).options(joinedload(Order.items)).where(Order.order_ref == order_ref)
-    )

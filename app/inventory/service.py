@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from app.models import Order, OutboxEvent, Product, StockEventApplication
+from app.db.models import Order, OutboxEvent, Product, StockEventApplication
 
 
 class InsufficientStock(Exception):

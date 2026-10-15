@@ -2,13 +2,12 @@ import logging
 import signal
 import time
 
-from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import POLL_INTERVAL_SECONDS, WORKER_BATCH_SIZE
-from app.db import SessionLocal
-from app.inventory import InsufficientStock, apply_event
-from app.models import OutboxEvent
+from app.db.session import SessionLocal
+from app.inventory.service import InsufficientStock, apply_event
+from app.outbox.repository import pending_events
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("stock-worker")
@@ -29,12 +28,7 @@ def run() -> None:
     while not stopping:
         try:
             with SessionLocal() as session:
-                pending = session.execute(
-                    select(OutboxEvent.event_id, OutboxEvent.payload)
-                    .where(OutboxEvent.processed_at.is_(None))
-                    .order_by(OutboxEvent.created_at, OutboxEvent.event_id)
-                    .limit(WORKER_BATCH_SIZE)
-                ).all()
+                pending = pending_events(session, WORKER_BATCH_SIZE)
         except SQLAlchemyError:
             logger.exception("Failed to poll the outbox; retrying after the poll interval")
             time.sleep(POLL_INTERVAL_SECONDS)

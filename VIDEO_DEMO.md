@@ -1,6 +1,6 @@
 # Video demo recording guide
 
-This guide is a ready-to-record voice-over plan for the requested 5–10 minute demo. The recording itself should be made with Loom or another screen recorder while the local stack is running.
+This guide is a longer optional voice-over plan for the demo. For the requested concise five-minute recording using Postman, follow [MANUAL_TEST_CHECKLIST.md](MANUAL_TEST_CHECKLIST.md). The recording itself should be made with Loom or another screen recorder while the local stack is running.
 
 ## Before recording
 
@@ -23,7 +23,7 @@ Open `http://localhost:8000/docs` and keep a terminal available.
 
 ### 0:45–2:00 — Architecture and storage
 
-Show `SOLUTION.md`, then `app/models.py` and `app/orders.py`.
+Show `SOLUTION.md`, then `app/db/models.py` and `app/orders/service.py`.
 
 “PostgreSQL stores products, orders, item price snapshots, and an outbox event. The order and its `OrderAccepted` event commit in one transaction, so an accepted order cannot be separated from its stock update request. The unique order reference is the idempotency boundary.”
 
@@ -54,7 +54,7 @@ python -m scripts.outage_demo
 Restart the worker:
 
 ```bash
-python -m app.worker
+python -m app.outbox.worker
 ```
 
 Query the order references printed by the outage script:

@@ -6,8 +6,8 @@ import sys
 import httpx
 from sqlalchemy import func, select
 
-from app.db import SessionLocal
-from app.models import OutboxEvent
+from app.db.session import SessionLocal
+from app.db.models import OutboxEvent
 from scripts.cli import checked_json, run_cli
 
 BASE_URL = "http://127.0.0.1:8000"

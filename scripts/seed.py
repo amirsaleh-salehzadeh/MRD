@@ -2,8 +2,8 @@ import sys
 
 from sqlalchemy.dialects.postgresql import insert
 
-from app.db import SessionLocal, initialize_database
-from app.models import Product
+from app.db.session import SessionLocal, initialize_database
+from app.db.models import Product
 from scripts.cli import run_cli
 
 SEED_PRODUCTS = [

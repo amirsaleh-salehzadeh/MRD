@@ -63,7 +63,7 @@ The intended story is:
 
 ## 3. Proposed stack and repository structure
 
-- Python 3.12+ (choose one supported version and document it)
+- Python 3.10+ (documented and used by the Docker image and current host)
 - FastAPI + Uvicorn
 - SQLAlchemy 2.x + psycopg (or psycopg directly if simpler)
 - PostgreSQL 15+; migrations via Alembic or a small deterministic SQL initializer
@@ -72,31 +72,25 @@ The intended story is:
 - Docker Compose **optional** for PostgreSQL convenience, but native local startup instructions required
 
 ```text
-.
-├── README.md
-├── SOLUTION.md
-├── TODO.md
-├── pyproject.toml              # or requirements.txt
-├── .env.example
+mr-d-orders/
 ├── app/
-│   ├── main.py                 # FastAPI entrypoint
+│   ├── api/                 # orders.py, products.py, events.py
+│   ├── orders/              # service.py, repository.py
+│   ├── inventory/           # service.py
+│   ├── outbox/              # repository.py, worker.py
+│   ├── db/                  # models.py, session.py
 │   ├── config.py
-│   ├── db.py
-│   ├── models.py
+│   ├── reporting.py
 │   ├── schemas.py
-│   ├── orders.py               # order transaction + price snapshots
-│   ├── inventory.py            # atomic stock application
-│   ├── outbox.py               # event polling + locking
-│   ├── worker.py               # separate process entrypoint
-│   └── reporting.py
-├── scripts/
-│   ├── seed.py
-│   ├── burst_demo.py
-│   └── outage_demo.py
-└── tests/
-    ├── test_orders.py
-    ├── test_worker.py
-    └── test_reporting.py
+│   └── main.py
+├── scripts/                 # seed.py, submit_orders.py, consume_events.py
+├── migrations/
+├── tests/
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+├── README.md
+└── SOLUTION.md
 ```
 
 Adjust names only when there is a clear simplification; do not create unnecessary layers.
@@ -236,7 +230,7 @@ In the phase checklists below, a checked item means its implementation or docume
 
 ### Phase 3 — Transactional outbox and worker
 - [x] Define a versioned `OrderAccepted` event payload.
-- [x] Implement independent worker startup (`python -m app.worker`).
+- [x] Implement independent worker startup (`python -m app.outbox.worker`).
 - [x] Poll pending outbox rows in small batches; lock safely for possible multiple workers.
 - [x] Process each event within one transaction with an idempotency/application marker.
 - [x] Deduct product quantities atomically; update order to `STOCK_UPDATED` and set event `processed_at`.
@@ -263,7 +257,7 @@ In the phase checklists below, a checked item means its implementation or docume
 - [x] Ensure scripts are rerunnable with fresh references, rather than failing due to prior execution.
 - [x] Print before/after stock, accepted order counts, duplicate count, pending events, and final results across the demos.
 - [x] Validate HTTP status/JSON responses and return a nonzero CLI result for failed setup/demo commands.
-- [ ] Demonstrate **only** the two required unhappy paths explicitly: duplicates and interruption/recovery.
+- [x] Keep the documented demo scope to the two required unhappy paths: duplicates and interruption/recovery. Runtime re-demonstration still depends on a reachable PostgreSQL/API stack.
 
 **Exit criteria:** a reviewer can reproduce both scenarios with a few commands.
 
@@ -290,7 +284,7 @@ In the phase checklists below, a checked item means its implementation or docume
 - [x] Explain why PostgreSQL polling was preferred over Kafka/RabbitMQ, and when a broker would make sense later.
 - [x] Explain that at-least-once event processing plus an idempotent consumer prevents double deductions; never claim exactly-once delivery.
 - [x] Explain intentionally excluded capabilities and short timebox.
-- [ ] Verify that no secrets or generated artifacts are committed; keep the repository concise and reviewer-friendly.
+- [x] Verify that no secrets or generated artifacts are committed; keep the repository concise and reviewer-friendly. Scanned tracked paths and source for environment files, generated files, and credential patterns.
 - [ ] Push one well-organized GitHub repository with meaningful commits; verify clone instructions work.
 
 **Exit criteria:** another engineer can reproduce the demonstration using README alone.
@@ -347,6 +341,7 @@ Expected result **after processing**: 3 unique orders; 2,688 cents revenue; unit
 
 | Date/time UTC | Phase | Change made | Verification command/result | Remaining blocker |
 |---|---|---|---|---|
+| 2026-10-15 14:34 UTC | Structure and verification follow-up | Moved API handlers into `app/api/orders.py` and `app/api/products.py`, assembled them in `app/main.py`, wired order/outbox repository modules, and added the requested script entry points and migration directory. Updated the proposed structure. | `python -m compileall -q app scripts tests` passed; OpenAPI route inventory contains POST/GET orders, product stock, daily report, and health; `python -m pytest -q` => 2 passed, 5 skipped because no PostgreSQL test database/server is configured; `git diff --check` passed. Ruff is not installed. Docker is installed but the Docker Engine pipe is inaccessible. | Fresh setup, live two-process demos, Compose/Postman run, video recording, and GitHub publication still need the appropriate database/engine and handoff access. |
 | 2026-10-14 08:00 UTC | Phases 0–7 (implementation) | Added Python app/schema, order API, versioned outbox worker, reports, seed/init and demo scripts, PostgreSQL integration tests, README/SOLUTION, `.gitignore`, and pinned dependencies. Selected Python 3.10+ to match available interpreter. | `python -m compileall -q app scripts tests` passed; PostgreSQL DDL compiled with SQLAlchemy's PostgreSQL dialect; app OpenAPI import listed all target routes; `git diff --check` passed. Initial run: 4 PostgreSQL checks skipped because no PostgreSQL URL/server was available. `docker info` could not connect to the Docker daemon; no `psql` installed. | PostgreSQL-backed execution/tests and manual two-process demos remain unverified. GitHub push and video are manual deliverables. |
 | 2026-10-14 08:17 UTC | Error handling review | Added sanitized API exception responses, explicit CLI HTTP/JSON/database error handling, worker polling error handling/backoff, failure checks in the demos, and documented the behavior in README/SOLUTION/TODO. | `python -m compileall -q app scripts tests` passed; OpenAPI loaded; `python -m pytest -q` => 1 passed (API error mapping), 4 skipped (PostgreSQL unavailable); `python -m scripts.init_db` exited 1 with a concise database configuration error, as expected without PostgreSQL; `git diff --check` passed. | PostgreSQL behavior and full demos still need a local PostgreSQL server. |
 | 2026-10-14 08:31 UTC | Phases 0–2 verification | Added pinned Ruff lint/format commands and completed the schema/order API checks using a temporary PostgreSQL 16 cluster. Confirmed seed repeatability, duplicate handling, concurrent idempotency, API reads, and API health. | `python -m ruff check app scripts tests` passed; `python -m ruff format --check app scripts tests` passed; `python -m scripts.init_db` passed; `python -m scripts.seed` ran twice and retained BAN-001=50, APL-003=40, COF-005=25; `TEST_DATABASE_URL=... python -m pytest -q` => 6 passed; live Uvicorn POST returned 202 then 200 duplicate, changed payload returned 409, GET order/stock and `/health` passed. A fresh venv dependency installation stalled and was interrupted; WSL access was denied. | Unix clean-install criterion remains unverified; Phase 0's other setup tasks and Phase 1/2 criteria are complete. |

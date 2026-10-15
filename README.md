@@ -82,7 +82,7 @@ uvicorn app.main:app --reload
 ```
 
 ```bash
-python -m app.worker
+python -m app.outbox.worker
 ```
 
 The API is at `http://127.0.0.1:8000`; interactive API docs are at `/docs`.
@@ -126,7 +126,7 @@ python -m scripts.outage_demo
 The script prints stock before and during the pause and the accepted orders' statuses. Restart the worker:
 
 ```bash
-python -m app.worker
+python -m app.outbox.worker
 ```
 
 Query the order references printed by the script again; they should reach `STOCK_UPDATED`. The daily report counts accepted orders while processing is paused, while its stock values show the current (possibly lagging) product table.
@@ -144,4 +144,4 @@ The integration checks create sample tables and test products in that database. 
 ## Design notes
 
 See [SOLUTION.md](SOLUTION.md) for schema, transaction boundaries, event processing, consistency semantics, and scope limits.
-Use [VIDEO_DEMO.md](VIDEO_DEMO.md) as a timed recording and narration guide for the requested walkthrough.
+Use [MANUAL_TEST_CHECKLIST.md](MANUAL_TEST_CHECKLIST.md) as the five-minute Postman recording run sheet. [VIDEO_DEMO.md](VIDEO_DEMO.md) contains a longer optional narration guide.

@@ -48,7 +48,7 @@ services:
 
   worker:
     build: .
-    command: ["python", "-m", "app.worker"]
+    command: ["python", "-m", "app.outbox.worker"]
     environment:
       DATABASE_URL: postgresql+psycopg2://mrd:mrd-local@db:5432/mrd_orders
       POLL_INTERVAL_SECONDS: "1.0"

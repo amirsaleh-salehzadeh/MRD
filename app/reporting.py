@@ -3,7 +3,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Order, OrderItem, Product
+from app.db.models import Order, OrderItem, Product
 
 
 def daily_report(session: Session, report_date: date) -> dict:

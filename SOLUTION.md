@@ -4,7 +4,7 @@
 
 - **Orders API (`app.main`)** accepts a request, reads authoritative product prices, and commits its order, snapshot line items, and `OrderAccepted` JSONB event in one PostgreSQL transaction.
 - **PostgreSQL** is both the system of record and the durable queue. A unique constraint on `orders.order_ref` is the idempotency boundary.
-- **Stock Worker (`app.worker`)** runs independently and polls pending events. Each event is locked with `FOR UPDATE SKIP LOCKED`; stock updates, the event application marker, order status, and `processed_at` commit in the same transaction.
+- **Stock Worker (`app.outbox.worker`)** runs independently and polls pending events. Each event is locked with `FOR UPDATE SKIP LOCKED`; stock updates, the event application marker, order status, and `processed_at` commit in the same transaction.
 - **Read/report routes** expose order state, current stock, and a UTC-day accepted-order report.
 
 ```text
