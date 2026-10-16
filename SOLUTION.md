@@ -1,48 +1,51 @@
-# Solution notes
+# Solution Overview
+
+## Design choice: transactional outbox
+
+Accepting an order and changing stock are separate jobs. The API needs to respond quickly, while stock processing can take place independently and may be unavailable temporarily. The system uses an event-driven flow with a PostgreSQL outbox: the API writes the order and its `OrderAccepted` event in the **same database transaction**, then a worker processes the event.
+
+This avoids a dual-write failure where an order commits but its stock-update instruction is lost. If the worker is stopped, accepted orders remain durable and stock events wait in PostgreSQL. When the worker resumes, it processes the backlog. PostgreSQL already holds the order data, so it also serves as the queue without adding a separate broker.
+
+The trade-off is eventual consistency: an accepted order can remain `PENDING_STOCK` until the worker processes its event. Stock and order status then catch up.
+
+## Processing flow
+
+1. The API validates the request and reads product prices from PostgreSQL.
+2. In one transaction, it saves the order, item price snapshots, and versioned `OrderAccepted` outbox event.
+3. The worker polls for unprocessed outbox events, selecting them in creation-time order.
+4. For each event, it locks the row with `FOR UPDATE SKIP LOCKED`, calculates quantities, and decrements stock only when enough stock is available.
+5. In the same transaction, it records the event application, sets the order to `STOCK_UPDATED`, and marks the event as processed.
+
+If processing fails, the transaction rolls back. The event stays pending and the worker retries it on a later poll. If the worker receives `SIGINT` or `SIGTERM`, it stops polling and exits; unprocessed events remain in the database for the next run.
 
 ## Components
 
-- **Orders API (`app.main`)** accepts a request, reads authoritative product prices, and commits its order, snapshot line items, and `OrderAccepted` JSONB event in one PostgreSQL transaction.
-- **PostgreSQL** is both the system of record and the durable queue. A unique constraint on `orders.order_ref` is the idempotency boundary.
-- **Stock Worker (`app.outbox.worker`)** runs independently and polls pending events. Each event is locked with `FOR UPDATE SKIP LOCKED`; stock updates, the event application marker, order status, and `processed_at` commit in the same transaction.
-- **Read/report routes** expose order state, current stock, and a UTC-day accepted-order report.
+- **Orders API (`app/api/orders.py`, `app/orders/service.py`)** accepts orders, calculates totals using database prices, handles duplicate references, and returns order details.
+- **PostgreSQL (`app/db/models.py`)** stores products, orders, item snapshots, outbox events, and event application records.
+- **Outbox worker (`app/outbox/worker.py`)** polls pending events and applies stock changes through `app/inventory/service.py`.
+- **Read APIs (`app/api/products.py`, `app/api/events.py`, `app/main.py`)** expose product and stock details, event records, health and readiness checks, and the daily report.
 
 ```text
-Client -> Orders API -> PostgreSQL (orders + items + outbox)
-                              ^                 |
-                              |                 v
-                       inventory tables <- Stock Worker
-Client -> read endpoints / daily report <- PostgreSQL
+Client -> Orders API -> PostgreSQL (order + items + outbox event)
+                                   |
+                                   v
+                             Stock worker
+                                   |
+                                   v
+                       PostgreSQL (stock + application record)
 ```
 
-## Schema and invariants
+## Data and API rules
 
-`products` holds integer cent prices and nonnegative inventory. `orders.order_ref` is unique. `order_items` keeps the SKU, quantity, unit price snapshot, and line total. `outbox_events` holds a versioned event envelope as JSONB, including its event ID, type, version, UTC occurrence time, and order payload. `stock_event_applications.event_id` is the consumer idempotency marker.
+- `products` stores current price in cents and current stock. Database constraints prevent negative stock and prices.
+- `orders.order_ref` is unique and is the idempotency key. An identical retry returns the existing order without emitting another event; a different payload using the same reference returns HTTP 409.
+- `order_items` stores the quantity, unit price, and line total captured at order time. Client-submitted prices are not trusted.
+- `outbox_events` stores a versioned event envelope. `stock_event_applications` records which event the inventory worker has applied.
+- Business routes have one canonical versioned path under `/api/v1`. The event feed is paginated and remains readable after the worker processes an event.
+- `/health` checks that the API process responds; `/ready` checks PostgreSQL connectivity. `/reports/daily` summarizes accepted orders by UTC creation date and shows current stock, which may lag during a worker pause.
 
-The schema is created deterministically by SQLAlchemy metadata through `python -m scripts.init_db`. It uses PostgreSQL UUID, JSONB, constraints, foreign keys, and timezone-aware timestamps. Seeding is insert-only on SKU so rerunning it does not replenish or overwrite stock.
+## Guarantees and limits
 
-The API calculates totals from product prices in integer cents. It never accepts prices from the client. A repeat with identical reference/customer/item lines returns the existing order and emits no event. Reusing a reference with changed customer or item lines returns 409. The database insert uses `ON CONFLICT DO NOTHING` against the unique reference so concurrent submissions converge on the same durable row.
+The outbox event is persisted atomically with the order. Worker stock updates, the application record, order status, and event acknowledgement commit together. If the worker sees an already applied event, it skips the stock change. Conditional stock updates prevent inventory from becoming negative.
 
-## Outbox and worker guarantees
-
-The API has no dual-write to a separate broker: it stores the order and event in one commit. Event delivery is at least once. The worker locks an event row and checks its application marker before making any stock change. Conditional atomic decrements prevent negative stock. The marker, stock changes, status update, and processed timestamp share a transaction, so a crash rolls all of them back together. Replaying an applied event is a no-op.
-
-Insufficient stock causes the transaction to roll back and leaves the event pending, with a concise worker error log. The sample data assumes enough stock; choosing a reservation, rejection, or oversell policy is intentionally outside this exercise.
-
-Stopping the worker stops only stock processing. The API and PostgreSQL remain available, and accepted orders build up durably. Starting the worker again drains the pending events. No broker was added because a PostgreSQL poller keeps this four-hour demo small; a broker would be useful for broader fan-out, independent consumers, or throughput beyond the database's comfortable polling load.
-
-## Status and reporting consistency
-
-`PENDING_STOCK` means the order and event are committed while the stock projection awaits processing. `STOCK_UPDATED` means the stock effect was committed. The daily report uses UTC order-creation day boundaries. It counts accepted orders and their item units regardless of worker state, and reports current stock from `products`; it is not historical as-of-day inventory. Thus stock may lag during a worker pause.
-
-## Error handling
-
-The API maps expected request failures to stable HTTP responses: validation/unknown SKU to 422, changed duplicate references to 409, missing resources to 404, and database connectivity failures to 503. Database and unexpected server errors return generic responses; server logs retain the diagnostic details. The worker catches polling and per-event failures, logs identifiers, leaves uncommitted events pending, and waits for the polling interval before retrying. CLI scripts check HTTP status and JSON shape, report API/database failures, and exit nonzero instead of presenting failed responses as demo results.
-
-Request bounds keep persisted values representable: each order has 1–100 item lines, each quantity fits PostgreSQL `INTEGER`, and a total larger than PostgreSQL `BIGINT` is rejected with HTTP 422 inside the transaction so partial order, item, and outbox writes are rolled back. Invalid worker configuration fails immediately with an actionable setting-specific message.
-
-Domain/service functions let unexpected persistence and data errors propagate so their transaction boundaries can roll back. The API, worker loop, and CLI entry points handle those failures where they can choose the correct client response, retry/backoff behavior, or process exit status.
-
-## Scope limits
-
-This is a single-database local demo with polling delay and basic logging. It has no authentication, payments, reservations, cancellation/refunds, broker fan-out, retry framework, retention policy, metrics, or sophisticated stock-shortage handling. Production work would define those policies, plus migration/versioning operations, monitoring, and scaling limits.
+An insufficient-stock event remains pending and is logged; this demo does not define whether a real order should be rejected, reserved, or allowed to oversell. The system also omits authentication, payments, cancellation, schema migrations, metrics, and advanced retry controls. Those policies and operational features would be needed before production use.

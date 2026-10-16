@@ -2,69 +2,877 @@
   "info": {
     "_postman_id": "073b88dc-1589-4b96-bf0b-40f8b61abed6",
     "name": "Mr D Orders & Stock API",
-    "description": "Run in order with Docker Compose. The collection creates a fresh order reference and checks success, duplicate, validation, not-found, stock, report, and error responses.",
+    "description": "Run the Automated API checks folder in order with Docker Compose running. The manual worker outage folders require stopping and restarting the worker as described in each folder.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:8000" },
-    { "key": "orderRef", "value": "" },
-    { "key": "reportDate", "value": "" }
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "orderRef",
+      "value": ""
+    },
+    {
+      "key": "orderId",
+      "value": ""
+    },
+    {
+      "key": "expectedTotal",
+      "value": "0"
+    },
+    {
+      "key": "reportDate",
+      "value": ""
+    },
+    {
+      "key": "productSku",
+      "value": ""
+    },
+    {
+      "key": "eventId",
+      "value": ""
+    },
+    {
+      "key": "eventCursor",
+      "value": ""
+    },
+    {
+      "key": "outageOrderRef",
+      "value": ""
+    },
+    {
+      "key": "outageOrderId",
+      "value": ""
+    },
+    {
+      "key": "outageStockBefore",
+      "value": ""
+    }
   ],
   "item": [
     {
-      "name": "Health",
-      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/health" },
-      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('API and database are healthy', function () {", "    pm.response.to.have.status(200);", "    pm.expect(pm.response.json().status).to.eql('ok');", "});"] } }]
+      "name": "Automated API checks",
+      "description": "Run this folder in order with the API, database, and worker running.",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/health"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('API is live', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().status).to.eql('ok');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Readiness",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/ready"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Database is ready', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().status).to.eql('ready');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Load sample product prices",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/products"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Sample products exist and prices can be used to verify server totals', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const products = pm.response.json();",
+                  "    const banana = products.find(p => p.sku === 'BAN-001');",
+                  "    const apple = products.find(p => p.sku === 'APL-003');",
+                  "    pm.expect(banana, 'BAN-001 must be seeded').to.exist;",
+                  "    pm.expect(apple, 'APL-003 must be seeded').to.exist;",
+                  "    pm.collectionVariables.set('expectedTotal', banana.price_cents + apple.price_cents);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create order",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"order_ref\": \"{{orderRef}}\",\n  \"customer_id\": \"postman-customer\",\n  \"items\": [\n    {\n      \"sku\": \"BAN-001\",\n      \"qty\": 1\n    },\n    {\n      \"sku\": \"APL-003\",\n      \"qty\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('orderRef', 'postman-' + pm.variables.replaceIn('{{$guid}}'));",
+                  "pm.collectionVariables.set('reportDate', new Date().toISOString().slice(0, 10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Order accepted; total is calculated from database prices', function () {",
+                  "    pm.response.to.have.status(202);",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.order_ref).to.eql(pm.collectionVariables.get('orderRef'));",
+                  "    pm.expect(body.total_cents).to.eql(Number(pm.collectionVariables.get('expectedTotal')));",
+                  "    pm.expect(body.status).to.be.oneOf(['PENDING_STOCK', 'STOCK_UPDATED']);",
+                  "    pm.expect(body.duplicate).to.eql(false);",
+                  "    pm.collectionVariables.set('orderId', body.order_id);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Repeat identical order",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"order_ref\": \"{{orderRef}}\",\n  \"customer_id\": \"postman-customer\",\n  \"items\": [\n    {\n      \"sku\": \"BAN-001\",\n      \"qty\": 1\n    },\n    {\n      \"sku\": \"APL-003\",\n      \"qty\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Identical retry returns the same order without duplication', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.duplicate).to.eql(true);",
+                  "    pm.expect(body.order_id).to.eql(pm.collectionVariables.get('orderId'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Changed duplicate payload",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"order_ref\": \"{{orderRef}}\",\n  \"customer_id\": \"postman-customer\",\n  \"items\": [\n    {\n      \"sku\": \"BAN-001\",\n      \"qty\": 2\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Changed payload with the same reference returns conflict', function () {",
+                  "    pm.response.to.have.status(409);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read order by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/orders/{{orderId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Order lookup returns the saved item and price snapshots', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.id).to.eql(pm.collectionVariables.get('orderId'));",
+                  "    pm.expect(body.order_ref).to.eql(pm.collectionVariables.get('orderRef'));",
+                  "    pm.expect(body.items).to.have.length(2);",
+                  "    pm.expect(body.status).to.be.oneOf(['PENDING_STOCK', 'STOCK_UPDATED']);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List products",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/products"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Product list is returned in SKU order', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const products = pm.response.json();",
+                  "    pm.expect(products).to.be.an('array').and.not.empty;",
+                  "    pm.expect(products.map(p => p.sku)).to.eql([...products.map(p => p.sku)].sort());",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read BAN-001 product",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/products/BAN-001"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Product detail includes price and stock', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.sku).to.eql('BAN-001');",
+                  "    pm.expect(body.price_cents).to.be.a('number');",
+                  "    pm.expect(body.stock).to.be.a('number');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read BAN-001 stock",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/products/BAN-001/stock"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Stock lookup returns a nonnegative integer', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.sku).to.eql('BAN-001');",
+                  "    pm.expect(body.stock).to.be.a('number').and.at.least(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create product",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/products",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sku\": \"{{productSku}}\",\n  \"name\": \"Postman demo product\",\n  \"price_cents\": 123,\n  \"stock\": 10\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('productSku', 'PM-' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Product is created without overwriting an existing SKU', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.sku).to.eql(pm.collectionVariables.get('productSku'));",
+                  "    pm.expect(body.price_cents).to.eql(123);",
+                  "    pm.expect(body.stock).to.eql(10);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read created product",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/products/{{productSku}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Created product can be read back', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().sku).to.eql(pm.collectionVariables.get('productSku'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reject duplicate product SKU",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/products",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sku\": \"{{productSku}}\",\n  \"name\": \"Postman duplicate\",\n  \"price_cents\": 999,\n  \"stock\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Existing SKU is rejected and not overwritten', function () {",
+                  "    pm.response.to.have.status(409);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List first event page",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/events?limit=1"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Event feed returns a page and cursor field', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.items).to.be.an('array').and.not.empty;",
+                  "    pm.expect(body).to.have.property('next_cursor');",
+                  "    const event = body.items[0];",
+                  "    pm.collectionVariables.set('eventId', event.event_id);",
+                  "    pm.collectionVariables.set('eventCursor', event.event_id);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read event by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/events/{{eventId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Stored event can be retrieved by ID', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.event_id).to.eql(pm.collectionVariables.get('eventId'));",
+                  "    pm.expect(body.event_type).to.eql('OrderAccepted');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Continue event feed with cursor",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/events?limit=1&cursor={{eventCursor}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Cursor continues the event feed', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().items).to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Daily report",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/reports/daily?date={{reportDate}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Daily report includes accepted orders, revenue, units, and stock', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body).to.have.property('accepted_orders');",
+                  "    pm.expect(body).to.have.property('revenue_cents');",
+                  "    pm.expect(body).to.have.property('units_sold_per_sku');",
+                  "    pm.expect(body).to.have.property('current_stock_per_sku');",
+                  "    pm.expect(body.stock_may_lag).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown SKU",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"order_ref\": \"{{orderRef}}-unknown\",\n  \"customer_id\": \"postman-customer\",\n  \"items\": [\n    {\n      \"sku\": \"NO-SUCH-SKU\",\n      \"qty\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Unknown SKU is rejected and does not create an order', function () {",
+                  "    pm.response.to.have.status(422);",
+                  "    pm.expect(pm.response.json().detail).to.include('Unknown SKU');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid quantity",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"order_ref\": \"{{orderRef}}-invalid\",\n  \"customer_id\": \"postman-customer\",\n  \"items\": [\n    {\n      \"sku\": \"BAN-001\",\n      \"qty\": 0\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Invalid quantity is rejected by validation', function () {",
+                  "    pm.response.to.have.status(422);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing order",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/orders/00000000-0000-0000-0000-000000000000"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Missing order returns 404', function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing product",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/products/NO-SUCH-SKU/stock"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Missing product returns 404', function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing event",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/events/00000000-0000-0000-0000-000000000000"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Missing event returns 404', function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown event cursor",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/events?cursor=00000000-0000-0000-0000-000000000000"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Unknown event cursor returns 404', function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
     },
     {
-      "name": "Create order",
-      "event": [{ "listen": "prerequest", "script": { "type": "text/javascript", "exec": ["pm.collectionVariables.set('orderRef', 'postman-' + pm.variables.replaceIn('{{$guid}}'));", "pm.collectionVariables.set('reportDate', new Date().toISOString().slice(0, 10));"] } }, { "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('New order is accepted and priced by the server', function () {", "    pm.response.to.have.status(202);", "    const body = pm.response.json();", "    pm.expect(body.order_ref).to.eql(pm.collectionVariables.get('orderRef'));", "    pm.expect(body.total_cents).to.eql(498);", "    pm.expect(body.duplicate).to.eql(false);", "    pm.collectionVariables.set('orderId', body.order_id);", "});"] } }],
-      "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"order_ref\": \"{{orderRef}}\",\n  \"customer_id\": \"postman-customer\",\n  \"items\": [\n    { \"sku\": \"BAN-001\", \"qty\": 1 },\n    { \"sku\": \"APL-003\", \"qty\": 1 }\n  ]\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/orders" }
+      "name": "Manual scenario: pause worker and queue order",
+      "description": "Run this folder separately after `docker compose stop worker`. Do not run the full collection while the worker is stopped. It records stock, submits one BAN-001 order, and verifies the order stays pending while stock is unchanged.",
+      "item": [
+        {
+          "name": "Record BAN-001 stock before pause",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/products/BAN-001/stock"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Capture starting stock', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.collectionVariables.set('outageStockBefore', pm.response.json().stock);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create order while worker is stopped",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/v1/orders",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"order_ref\": \"{{outageOrderRef}}\",\n  \"customer_id\": \"postman-outage-customer\",\n  \"items\": [\n    {\n      \"sku\": \"BAN-001\",\n      \"qty\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('outageOrderRef', 'postman-outage-' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Order is accepted but remains pending while worker is stopped', function () {",
+                  "    pm.response.to.have.status(202);",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.status).to.eql('PENDING_STOCK');",
+                  "    pm.collectionVariables.set('outageOrderId', body.order_id);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Confirm stock stays unchanged during pause",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/products/BAN-001/stock"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Stock has not changed while the event waits', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().stock).to.eql(Number(pm.collectionVariables.get('outageStockBefore')));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Confirm order is pending during pause",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/orders/{{outageOrderId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Order remains pending until the worker resumes', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().status).to.eql('PENDING_STOCK');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
     },
     {
-      "name": "Repeat identical order (idempotency)",
-      "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"order_ref\": \"{{orderRef}}\",\n  \"customer_id\": \"postman-customer\",\n  \"items\": [\n    { \"sku\": \"BAN-001\", \"qty\": 1 },\n    { \"sku\": \"APL-003\", \"qty\": 1 }\n  ]\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/orders" },
-      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Identical retry returns existing order without creating another', function () {", "    pm.response.to.have.status(200);", "    const body = pm.response.json();", "    pm.expect(body.duplicate).to.eql(true);", "    pm.expect(body.order_id).to.eql(pm.collectionVariables.get('orderId'));", "});"] } }]
-    },
-    {
-      "name": "Changed duplicate payload (409)",
-      "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"order_ref\": \"{{orderRef}}\",\n  \"customer_id\": \"postman-customer\",\n  \"items\": [{ \"sku\": \"BAN-001\", \"qty\": 2 }]\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/orders" },
-      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Changed duplicate is rejected as a conflict', function () {", "    pm.response.to.have.status(409);", "});"] } }]
-    },
-    {
-      "name": "Get order",
-      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/orders/{{orderRef}}" },
-      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Order details contain snapshot totals and status', function () {", "    pm.response.to.have.status(200);", "    const body = pm.response.json();", "    pm.expect(body.total_cents).to.eql(498);", "    pm.expect(body.items).to.have.length(2);", "    pm.expect(body.status).to.be.oneOf(['PENDING_STOCK', 'STOCK_UPDATED']);", "});"] } }]
-    },
-    {
-      "name": "Get BAN-001 stock",
-      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/products/BAN-001/stock" },
-      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Stock lookup returns a nonnegative integer', function () {", "    pm.response.to.have.status(200);", "    const body = pm.response.json();", "    pm.expect(body.sku).to.eql('BAN-001');", "    pm.expect(body.stock).to.be.a('number').and.to.be.at.least(0);", "});"] } }]
-    },
-    {
-      "name": "Daily report",
-      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/reports/daily?date={{reportDate}}" },
-      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Daily report has accepted-order and stock fields', function () {", "    pm.response.to.have.status(200);", "    const body = pm.response.json();", "    pm.expect(body).to.have.property('accepted_orders');", "    pm.expect(body).to.have.property('revenue_cents');", "    pm.expect(body).to.have.property('units_sold_per_sku');", "    pm.expect(body).to.have.property('current_stock_per_sku');", "});"] } }]
-    },
-    {
-      "name": "Unknown SKU (422)",
-      "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"order_ref\": \"{{orderRef}}-unknown\",\n  \"customer_id\": \"postman-customer\",\n  \"items\": [{ \"sku\": \"NO-SUCH-SKU\", \"qty\": 1 }]\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/orders" },
-      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Unknown SKU is a client error and does not create an order', function () {", "    pm.response.to.have.status(422);", "    pm.expect(pm.response.json().detail).to.include('Unknown SKU');", "});"] } }]
-    },
-    {
-      "name": "Invalid quantity (422)",
-      "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"order_ref\": \"{{orderRef}}-invalid\",\n  \"customer_id\": \"postman-customer\",\n  \"items\": [{ \"sku\": \"BAN-001\", \"qty\": 0 }]\n}", "options": { "raw": { "language": "json" } } }, "url": "{{baseUrl}}/orders" },
-      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Invalid request shape is rejected by validation', function () {", "    pm.response.to.have.status(422);", "});"] } }]
-    },
-    {
-      "name": "Missing order (404)",
-      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/orders/{{orderRef}}-missing" },
-      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Missing order returns 404', function () {", "    pm.response.to.have.status(404);", "});"] } }]
-    },
-    {
-      "name": "Missing product (404)",
-      "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/products/NO-SUCH-SKU/stock" },
-      "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": ["pm.test('Missing product returns 404', function () {", "    pm.response.to.have.status(404);", "});"] } }]
+      "name": "Manual scenario: restart worker and verify recovery",
+      "description": "After the pause folder succeeds, run `docker compose start worker`, wait a few seconds, then run this folder. If the worker has not processed the event yet, wait briefly and rerun the order-status request.",
+      "item": [
+        {
+          "name": "Verify order reached STOCK_UPDATED",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/orders/{{outageOrderId}}"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Worker processed the queued order', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().status).to.eql('STOCK_UPDATED');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify stock decreased after recovery",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/api/v1/products/BAN-001/stock"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Worker applied the queued stock change once', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const before = Number(pm.collectionVariables.get('outageStockBefore'));",
+                  "    pm.expect(pm.response.json().stock).to.eql(before - 1);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
     }
   ]
 }

@@ -8,19 +8,20 @@ from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from app.api.orders import router as orders_router
 from app.api.products import router as products_router
+from app.api.events import router as events_router
 from app.db.session import SessionLocal
 from app.orders.service import (
     DuplicatePayloadConflict,
     OrderTotalTooLarge,
     UnknownSKU,
     create_order,
-    get_order,
 )
 from app.reporting import daily_report
 
 app = FastAPI(title="Mr D Orders & Stock", version="1.0.0")
 app.include_router(orders_router)
 app.include_router(products_router)
+app.include_router(events_router)
 logger = logging.getLogger("orders-api")
 
 
@@ -53,10 +54,15 @@ def read_daily_report(report_date: date = Query(alias="date")):
 
 @app.get("/health")
 def health():
+    return {"status": "ok"}
+
+
+@app.get("/ready")
+def ready():
     try:
         with SessionLocal() as session:
             session.execute(text("SELECT 1"))
     except SQLAlchemyError as exc:
-        logger.warning("Health check failed: database unavailable", exc_info=exc)
+        logger.warning("Readiness check failed: database unavailable", exc_info=exc)
         raise HTTPException(status_code=503, detail="Database unavailable") from exc
-    return {"status": "ok"}
+    return {"status": "ready"}

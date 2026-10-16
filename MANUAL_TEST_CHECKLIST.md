@@ -1,82 +1,40 @@
-# Five-Minute Postman Video Run Sheet
+# Five-minute recording run sheet
 
-Use this timed checklist while recording your voice-over. It is designed for a concise five-minute walkthrough of the project and its two demonstrations: duplicate submission and stock catch-up after a worker pause.
+Use a fresh database if quoting the initial stock. `python -m scripts.seed` is insert-only and will not reset inventory. The actual contract is in `API_CONTRACT.md`; the full command sequence is in `TEST_WALKTHROUGH.md`.
 
-## Prepare before recording
+## Prepare
 
-- [ ] Start Docker Desktop and run the stack:
+```bash
+docker compose up --build -d
+docker compose ps
+```
 
-  ```bash
-  docker compose up --build -d
-  docker compose ps
-  ```
+Confirm `db`, `setup`, `api`, and `worker` are healthy/completed. Open Postman collection `postman/Mr-D-Orders.postman_collection.json` for supplementary API checks. For the recording, keep to one happy path and exactly these two unhappy paths: duplicate retry and temporary worker outage.
 
-- [ ] Confirm `db`, `api`, and `worker` are running and `setup` completed.
-- [ ] Import `postman/Mr-D-Orders.postman_collection.json` into Postman.
-- [ ] Confirm the collection's `baseUrl` variable is `http://localhost:8000`.
-- [ ] Open a terminal for the worker. Keep it visible or easy to switch to during the outage section.
-- [ ] Have Postman and the project source (`app/orders/service.py`, `app/outbox/worker.py`, `app/db/models.py`, and `SOLUTION.md`) ready to show.
-- [ ] Start recording only once the stack and Postman are ready. Keep the database running throughout.
+## 0:00–1:20 — Architecture
 
-## Recording checklist and narration
+Introduce the FastAPI/PostgreSQL order flow and Option B daily report. Show `SOLUTION.md`: order/items/outbox transaction, worker, and order statuses. Mention that this repo has no public `/events` endpoint.
 
-### 0:00–0:35 — Introduce the project
+## 1:20–2:35 — Happy path
 
-- [ ] Show the Postman collection and briefly show the project folder.
-- [ ] Say: “This is a Python and PostgreSQL order service. It accepts orders, snapshots prices, and updates stock with a separate worker. I’ll show duplicate protection and how stock catches up after a brief worker pause.”
+Show fresh seed stock: BAN-001 50, APL-003 40, COF-005 25. Submit an order for 2 BAN-001. Expected total 398 cents; poll the order to `STOCK_UPDATED`; BAN-001 becomes 48.
 
-### 0:35–1:15 — Explain the design
+## 2:35–3:25 — Unhappy path 1: duplicate
 
-- [ ] Briefly show `app/orders/service.py`, `app/db/models.py`, and `app/outbox/worker.py` (or show the architecture in `SOLUTION.md`).
-- [ ] Say: “The API stores the order, item price snapshots, and an OrderAccepted outbox event in one PostgreSQL transaction. A unique order reference prevents a second order. The worker reads pending events from PostgreSQL and updates stock, so accepted orders remain durable while the worker is stopped.”
+Repeat the identical order body with the same reference. Show HTTP 200, `duplicate: true`, and the same `order_id`. Stock remains 48. Do not add another duplicate variation to the recorded run.
 
-### 1:15–2:25 — Run the Postman collection for duplicates
+## 3:25–4:35 — Unhappy path 2: worker outage
 
-- [ ] In Postman, run the **Mr D Orders API** collection in its listed order.
-- [ ] Show the passing results for **Create order**, **Repeat identical order (idempotency)**, and **Changed duplicate payload (409)**.
-- [ ] Say: “The first request creates an order and calculates 498 cents from the seeded prices. Repeating the same reference and payload returns the same order ID as a duplicate. Changing the payload for that reference returns a conflict, so it cannot silently count as a different order.”
-- [ ] Briefly show **Get order** and **Get BAN-001 stock** results. Mention that the worker processes stock asynchronously.
+Stop only the stock worker (`docker compose stop worker`). Record current BAN-001 stock S. Submit two new order references with one BAN-001 each. Show both accepted/pending and stock still S. Resume with `docker compose start worker`; poll both orders and show stock S-2.
 
-### 2:25–3:45 — Show the worker pause in Postman
+## 4:35–5:00 — Report and close
 
-- [ ] In the worker terminal, press Ctrl+C to stop the worker. Leave the API and database running.
-- [ ] In Postman, send **Get BAN-001 stock** and note its value.
-- [ ] Send **Create order**. The collection generates a fresh reference; confirm HTTP 202 and `PENDING_STOCK`.
-- [ ] Send **Get order** and confirm it is still `PENDING_STOCK`.
-- [ ] Send **Get BAN-001 stock** again and show that it has not yet changed for this order.
-- [ ] Say: “The stock worker is paused, but the API still accepts the order. PostgreSQL keeps the event pending, so the stock projection is temporarily behind.”
+Call `/reports/daily?date=<UTC-date>` and show accepted count, revenue, units, and current stock. Explain that report counts accepted orders while stock can lag during worker downtime. Point to `AUDIT_RESULTS.md` for actual verification results; do not claim skipped PostgreSQL or unavailable Docker checks passed.
 
-### 3:45–4:25 — Resume and show catch-up
+## Cleanup
 
-- [ ] Restart the worker in the terminal:
+```bash
+docker compose down
+```
 
-  ```bash
-  python -m app.outbox.worker
-  ```
-
-- [ ] In Postman, send **Get order** again. If it is still pending, wait a moment and resend until it shows `STOCK_UPDATED`.
-- [ ] Send **Get BAN-001 stock** and show the updated value.
-- [ ] Say: “After restart, the worker processes the stored event. The order status and stock now reflect the completed update.”
-
-### 4:25–5:00 — Show report and close
-
-- [ ] Send the collection's **Daily report** request. Show `accepted_orders`, `revenue_cents`, `units_sold_per_sku`, and `current_stock_per_sku`.
-- [ ] Say: “The report summarizes accepted orders and current stock for a UTC day. I chose this report as the external surface. The trade-off is that PostgreSQL polling keeps the demo simple, while stock can lag briefly if the worker is paused.”
-- [ ] End the recording at about five minutes.
-
-## Postman collection requests
-
-The full collection also checks health, stock lookup, reporting, unknown SKU, invalid quantity, and missing-resource responses. These checks run automatically with the collection. If time is tight, keep the video focused on the three duplicate requests and the pause/recovery sequence above.
-
-The collection creates a fresh order reference for each run and uses the current UTC date for its report request.
-
-## After recording
-
-- [ ] Restart the worker if it is still stopped.
-- [ ] Stop the stack while preserving database data:
-
-  ```bash
-  docker compose down
-  ```
-
-- [ ] To delete the local database volume and demo data as well, run `docker compose down -v` instead.
+This preserves the database volume. Use `docker compose down -v` only when intentionally deleting local database data.

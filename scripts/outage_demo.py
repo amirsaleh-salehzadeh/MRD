@@ -30,12 +30,19 @@ def main() -> None:
     ]
     with httpx.Client(base_url=BASE_URL, timeout=10) as client:
         skus = ("BAN-001", "APL-003")
-        before = {sku: checked_json(client.get(f"/products/{sku}/stock"))["stock"] for sku in skus}
-        accepted = [checked_json(client.post("/orders", json=order)) for order in orders]
+        before = {
+            sku: checked_json(client.get(f"/api/v1/products/{sku}/stock"))["stock"]
+            for sku in skus
+        }
+        accepted = [checked_json(client.post("/api/v1/orders", json=order)) for order in orders]
         statuses = [
-            checked_json(client.get(f"/orders/{order['order_ref']}"))["status"] for order in orders
+            checked_json(client.get(f"/api/v1/orders/{item['order_id']}"))["status"]
+            for item in accepted
         ]
-        after = {sku: checked_json(client.get(f"/products/{sku}/stock"))["stock"] for sku in skus}
+        after = {
+            sku: checked_json(client.get(f"/api/v1/products/{sku}/stock"))["stock"]
+            for sku in skus
+        }
         with SessionLocal() as session:
             pending = session.scalar(
                 select(func.count())

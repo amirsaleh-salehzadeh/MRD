@@ -171,26 +171,33 @@ def test_http_read_surfaces(db_engine, monkeypatch):
             "customer_id": "cust",
             "items": [{"sku": "TEST-4", "qty": 2}],
         }
-        accepted = client.post("/orders", json=payload)
+        accepted = client.post("/api/v1/orders", json=payload)
         assert accepted.status_code == 202
         assert accepted.json()["total_cents"] == 160
-        repeated = client.post("/orders", json=payload)
+        repeated = client.post("/api/v1/orders", json=payload)
         assert repeated.status_code == 200
         assert repeated.json()["duplicate"] is True
         assert repeated.json()["order_id"] == accepted.json()["order_id"]
         changed_payload = {**payload, "items": [{"sku": "TEST-4", "qty": 3}]}
-        assert client.post("/orders", json=changed_payload).status_code == 409
+        assert client.post("/api/v1/orders", json=changed_payload).status_code == 409
         unknown_payload = {
             "order_ref": f"{reference}-unknown",
             "customer_id": "cust",
             "items": [{"sku": "NO-SUCH-SKU", "qty": 1}],
         }
-        assert client.post("/orders", json=unknown_payload).status_code == 422
-        assert client.get(f"/orders/{reference}").json()["items"][0]["unit_price_cents"] == 80
-        assert client.get("/orders/no-such-order").status_code == 404
-        assert client.get("/products/TEST-4/stock").json()["stock"] == 9
-        assert client.get("/products/NO-SUCH-SKU/stock").status_code == 404
+        assert client.post("/api/v1/orders", json=unknown_payload).status_code == 422
+        assert (
+            client.get(f"/api/v1/orders/{accepted.json()['order_id']}")
+            .json()["items"][0]["unit_price_cents"]
+            == 80
+        )
+        assert client.get(f"/api/v1/orders/{uuid.uuid4()}").status_code == 404
+        assert client.get("/api/v1/products/TEST-4/stock").json()["stock"] == 9
+        assert client.get("/api/v1/products/NO-SUCH-SKU/stock").status_code == 404
         assert client.get("/health").status_code == 200
+        assert client.post("/orders", json=payload).status_code == 404
+        assert client.get("/orders/legacy-reference").status_code == 404
+        assert client.get("/products/TEST-4/stock").status_code == 404
         report = client.get(
             "/reports/daily", params={"date": datetime.now(timezone.utc).date().isoformat()}
         )
@@ -234,12 +241,12 @@ def test_order_endpoint_returns_sanitized_errors(monkeypatch):
             "create_order",
             lambda *_args: (_ for _ in ()).throw(DuplicatePayloadConflict("error-case")),
         )
-        assert client.post("/orders", json=body).status_code == 409
+        assert client.post("/api/v1/orders", json=body).status_code == 409
 
         monkeypatch.setattr(
             main, "create_order", lambda *_args: (_ for _ in ()).throw(UnknownSKU("UNKNOWN"))
         )
-        assert client.post("/orders", json=body).status_code == 422
+        assert client.post("/api/v1/orders", json=body).status_code == 422
 
         monkeypatch.setattr(
             main,
@@ -248,7 +255,7 @@ def test_order_endpoint_returns_sanitized_errors(monkeypatch):
                 OrderTotalTooLarge("Order total exceeds the supported range")
             ),
         )
-        oversized = client.post("/orders", json=body)
+        oversized = client.post("/api/v1/orders", json=body)
         assert oversized.status_code == 422
         assert oversized.json() == {"detail": "Order total exceeds the supported range"}
 
@@ -259,7 +266,7 @@ def test_order_endpoint_returns_sanitized_errors(monkeypatch):
                 OperationalError("insert", {}, RuntimeError("offline"))
             ),
         )
-        unavailable = client.post("/orders", json=body)
+        unavailable = client.post("/api/v1/orders", json=body)
         assert unavailable.status_code == 503
         assert unavailable.json() == {"detail": "Database temporarily unavailable"}
 
@@ -268,6 +275,6 @@ def test_order_endpoint_returns_sanitized_errors(monkeypatch):
             "create_order",
             lambda *_args: (_ for _ in ()).throw(RuntimeError("private detail")),
         )
-        failed = client.post("/orders", json=body)
+        failed = client.post("/api/v1/orders", json=body)
         assert failed.status_code == 500
         assert failed.json() == {"detail": "Internal server error"}

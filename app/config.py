@@ -7,7 +7,7 @@ load_dotenv()
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+psycopg2://postgres:postgres@localhost:5432/mrd_orders",
+    "postgresql+psycopg2://mrd:mrd-local@localhost:64670/mrd_orders",
 )
 
 try:

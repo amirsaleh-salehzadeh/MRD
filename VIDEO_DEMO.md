@@ -1,83 +1,63 @@
-# Video demo recording guide
+# Video demo scenario — 5 to 8 minutes
 
-This guide is a longer optional voice-over plan for the demo. For the requested concise five-minute recording using Postman, follow [MANUAL_TEST_CHECKLIST.md](MANUAL_TEST_CHECKLIST.md). The recording itself should be made with Loom or another screen recorder while the local stack is running.
+Use this as a spoken walkthrough. The target is about 7 minutes. The live API demonstrations require the API and PostgreSQL to be running. If Docker Engine pipe access is still denied, do not present the live demo as completed: use the recorded audit evidence for the runtime limitation and demonstrate the code and expected flow instead, or run against a separately available PostgreSQL instance.
 
 ## Before recording
 
-For a clean demo database, start Docker Desktop and reset the local volume before starting the stack:
+- Keep `README.md`, `SOLUTION.md`, `AUDIT_RESULTS.md`, and `http://localhost:8000/docs` ready to show.
+- If the stack is available, start it with `docker compose up --build -d`, then confirm services with `docker compose ps` and open `/docs`.
+- Keep `.env`, passwords, and other secrets off screen.
+- If using a fresh database, the sample stock is BAN-001: 50, APL-003: 40, COF-005: 25. Seeding is insert-only and does not reset existing stock.
 
-```bash
-docker compose down -v
-docker compose up --build -d
-docker compose ps
-```
+## 0:00–0:40 — Introduce the project
 
-The `down -v` command deletes the local demo database volume. Use it only when you are happy to reset demo data.
-Open `http://localhost:8000/docs` and keep a terminal available.
+**Show:** README and the project tree.
 
-## Suggested 7-minute walkthrough
+**Say:** “This project is a small Python and PostgreSQL order service. It accepts orders, calculates prices from the product database, saves a snapshot of those prices, and updates inventory through a separate background worker. I’ll show how the service handles a repeated request and what happens when the worker is temporarily unavailable.”
 
-### 0:00–0:45 — What the project demonstrates
+## 0:40–1:35 — Explain the design
 
-“This is a small Python and PostgreSQL order intake and stock update service. The API accepts orders and calculates totals from database prices. It stores accepted orders durably, even while the independent stock worker is paused. I chose the minimal daily report as the external surface.”
+**Show:** `SOLUTION.md`, then the order service and database models.
 
-### 0:45–2:00 — Architecture and storage
+**Say:** “When an order is accepted, the order, its item and price snapshots, and an `OrderAccepted` outbox event are committed together. That means the request to update stock is stored durably with the order. The worker reads those events and applies stock changes. An order can be `PENDING_STOCK` while the event is waiting, then becomes `STOCK_UPDATED` after the worker succeeds.”
 
-Show `SOLUTION.md`, then `app/db/models.py` and `app/orders/service.py`.
+## 1:35–2:10 — Show the running service
 
-“PostgreSQL stores products, orders, item price snapshots, and an outbox event. The order and its `OrderAccepted` event commit in one transaction, so an accepted order cannot be separated from its stock update request. The unique order reference is the idempotency boundary.”
+**Show:** `docker compose ps`, then Swagger at `/docs`; optionally point out `db`, `setup`, `api`, and `worker` in `docker-compose.yml`.
 
-Point out that the event payload carries quantities and captured prices, while the worker only needs the quantities to update stock.
+**Say:** “Compose starts PostgreSQL, initializes the schema and sample products, and then runs the API and worker. The API exposes the order, product, stock, event, and daily report routes. Health and readiness are separate: health reports that the API process is alive, while readiness checks the database.”
 
-### 2:00–3:30 — Duplicate submission demonstration
+If Compose cannot start, say: “I could not complete the live startup in this environment because access to the Docker Engine named pipe was denied. The Compose configuration is present, but I won’t claim the live runtime flow passed. I’ll show the implementation and the recorded verification status.” Then show the relevant entry in `AUDIT_RESULTS.md` and continue with the design sections below.
 
-Run:
+## 2:10–3:10 — Demonstrate an order and identical retry
 
-```bash
-python -m scripts.burst_demo
-```
+**Show:** Submit an order through `/docs` or the supplied Postman collection. Use a new reference and two units of BAN-001. Show the response, then repeat the exact same request with the same reference. Show order details and stock if the worker is running.
 
-“The burst submits three distinct orders and then repeats the first order reference with the same payload. The API returns the existing order and marks the response as a duplicate. Only one order and one outbox event count for that reference, so stock is reduced once.”
+**Say:** “The first request is accepted, and the order total is calculated from the database price. Repeating the same reference with the same customer and item lines returns the existing order with `duplicate: true`; it does not create a second order or apply stock twice. A changed payload for that same reference is rejected with HTTP 409.”
 
-Show the printed duplicate result, final order statuses, and stock changes. In Swagger, optionally open `GET /orders/{order_ref}` for one printed reference.
+For a fresh sample database, two BAN-001 units cost 398 cents and stock goes from 50 to 48 after processing. If the database has been used before, describe the actual values displayed rather than quoting the fresh-seed numbers.
 
-### 3:30–5:30 — Worker interruption and catch-up
+## 3:10–5:25 — Demonstrate worker pause and recovery
 
-Stop the worker terminal with Ctrl+C. Leave the API and database running. Then run:
+**Show:** Stop the worker process with Ctrl+C, leaving the API and database running. Record the current BAN-001 stock. Submit two orders using different references, one BAN-001 unit each. Show their accepted responses and pending statuses, then check stock is unchanged. Restart the worker with `python -m app.outbox.worker`, poll the two orders, and show their final statuses and stock.
 
-```bash
-python -m scripts.outage_demo
-```
+**Say:** “The worker is paused, but the API can still accept and store orders. Both orders remain `PENDING_STOCK`, and stock stays at its previous value because the worker has not applied the outbox events. Once I restart the worker, it catches up. The orders move to `STOCK_UPDATED`, and stock decreases by two units in total.”
 
-“The stock worker is paused, but order intake still commits to PostgreSQL. The orders report `PENDING_STOCK`; inventory has not changed yet. The outbox is the durable backlog.”
+## 5:25–6:10 — Show the daily report
 
-Restart the worker:
+**Show:** `/reports/daily?date=<UTC-date>` and a product stock route.
 
-```bash
-python -m app.outbox.worker
-```
+**Say:** “The daily report summarizes accepted orders, revenue in cents, units by SKU, and current stock. Accepted orders are counted even during a worker pause, so the report can show current inventory lagging behind accepted demand.”
 
-Query the order references printed by the outage script:
+## 6:10–7:00 — Close with verification and trade-offs
 
-```bash
-curl http://localhost:8000/orders/<printed-order-reference>
-```
+**Show:** `AUDIT_RESULTS.md`, then the relevant section of `SOLUTION.md`.
 
-“After recovery the worker drains those events. The order status becomes `STOCK_UPDATED` and the stock endpoint reflects the decrements.”
+**Say:** “The outbox uses PostgreSQL rather than a separate message broker, which keeps this exercise small while preserving events across a worker interruption. Delivery is at least once, and the application marker and transaction make stock application idempotent. The recorded checks show what was actually verified: PostgreSQL-dependent checks were skipped when PostgreSQL was unavailable, and Docker Engine access prevented a live Compose startup. A production version would need a defined insufficient-stock policy, migrations, monitoring, and operational retry controls.”
 
-### 5:30–6:30 — Read API and daily report
+## Recording guardrails
 
-Show the order details, a stock route such as `/products/BAN-001/stock`, and `/reports/daily?date=<current-UTC-date>`.
-
-“The report returns accepted order count, revenue in cents, units by SKU, and current stock by SKU. During a worker pause it explicitly reflects the fact that stock can lag.”
-
-### 6:30–7:15 — Trade-offs and close
-
-“The outbox and worker use PostgreSQL instead of adding a broker, which keeps this local exercise small and makes recovery durable. Delivery is at least once, while an application marker and a single transaction make stock application idempotent. The demo assumes enough stock; a production system would need a defined shortage policy, migrations, monitoring, and operational retry controls.”
-
-## Recording checklist
-
-- Keep the API and worker logs readable and avoid showing `.env` secrets.
-- Show the duplicate response and the paused and recovered statuses clearly.
-- Keep the narration focused on the two demonstrations, the transaction boundary, and the PostgreSQL outbox trade-off.
-- Aim for 6–8 minutes; the timings above can be shortened or expanded as needed.
+- Aim for 6–7 minutes; shorten the architecture explanation if you need to stay under 8.
+- Only describe live API behavior as observed if you actually ran it during the recording.
+- Keep the two demonstrations focused: identical retry, then worker interruption and recovery.
+- If Docker is still blocked, clearly label the video as a code and evidence walkthrough rather than a successful live-stack demo.

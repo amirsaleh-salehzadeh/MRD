@@ -37,3 +37,10 @@ class OrderAccepted(BaseModel):
     total_cents: int
     status: str
     duplicate: bool = False
+
+
+class ProductCreate(BaseModel):
+    sku: str = Field(min_length=1, max_length=100)
+    name: str = Field(min_length=1, max_length=200)
+    price_cents: int = Field(ge=0, le=2_147_483_647)
+    stock: int = Field(ge=0, le=2_147_483_647)

@@ -34,11 +34,11 @@ def main() -> None:
     ]
     with httpx.Client(base_url=BASE_URL, timeout=10) as client:
         before = {
-            sku: checked_json(client.get(f"/products/{sku}/stock"))["stock"]
+            sku: checked_json(client.get(f"/api/v1/products/{sku}/stock"))["stock"]
             for sku in ("BAN-001", "APL-003", "COF-005")
         }
-        responses = [checked_json(client.post("/orders", json=order)) for order in orders]
-        duplicate = checked_json(client.post("/orders", json=orders[0]))
+        responses = [checked_json(client.post("/api/v1/orders", json=order)) for order in orders]
+        duplicate = checked_json(client.post("/api/v1/orders", json=orders[0]))
         print("Before stock:", before)
         print("New orders:", responses)
         print("Duplicate:", duplicate)
@@ -46,12 +46,16 @@ def main() -> None:
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             final_orders = [
-                checked_json(client.get(f"/orders/{order['order_ref']}")) for order in orders
+                checked_json(client.get(f"/api/v1/orders/{response['order_id']}"))
+                for response in responses
             ]
             if all(order["status"] == "STOCK_UPDATED" for order in final_orders):
                 break
             time.sleep(0.2)
-        after = {sku: checked_json(client.get(f"/products/{sku}/stock"))["stock"] for sku in before}
+        after = {
+            sku: checked_json(client.get(f"/api/v1/products/{sku}/stock"))["stock"]
+            for sku in before
+        }
         with SessionLocal() as session:
             pending = session.scalar(
                 select(func.count())

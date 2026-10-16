@@ -1,147 +1,73 @@
-# Mr D Orders & Stock Core Flow
+# Mr D Orders & Stock
 
-A small PostgreSQL-backed commerce demo: the Orders API stores orders and immutable price snapshots together with an `OrderAccepted` outbox event. A separate polling worker applies stock changes. Daily reporting counts accepted orders and shows the live stock projection.
+A Python and PostgreSQL service that accepts orders and updates stock with a separate worker.
 
-## Requirements
+## Why event-driven processing
 
-- Python 3.10 or newer
-- PostgreSQL 15 or newer
-- Windows, Linux, or macOS; PostgreSQL can be local or in Docker
+The API writes an order and its `OrderAccepted` outbox event in the same database transaction. This ensures that an accepted order always has a durable stock-update request. A separate worker processes the event, so the API can keep accepting orders while the worker is stopped; pending events are handled when it returns. The worker records each applied event to prevent retries from changing stock twice.
 
-The implementation uses Python 3.10 syntax so it can run on the provided Python 3.10 environment. PostgreSQL is required; SQLite is not supported for application or concurrency checks.
+PostgreSQL already stores the order data, so using it as the durable event queue keeps this project simple without adding a message broker. The trade-off is that stock can temporarily lag behind accepted orders while events wait for the worker.
 
-## Run the full stack with Docker Compose
+See [SOLUTION.md](SOLUTION.md) for the processing flow and reliability details.
 
-With Docker Desktop (or Docker Engine with the Compose plugin) running:
+## Run the application
 
-```bash
+Start the stack with Docker Desktop running:
+
+```powershell
 docker compose up --build -d
 docker compose ps
-docker compose logs -f api worker
 ```
 
-Compose starts PostgreSQL, waits for its health check, initializes the schema and inserts any missing sample products, then starts the API and worker. The API listens at `http://localhost:8000` and its OpenAPI page is at `http://localhost:8000/docs`. The sample database credentials in `docker-compose.yml` are for local development only.
+The API is at <http://localhost:8000>; interactive documentation is at <http://localhost:8000/docs>. Compose publishes PostgreSQL on host port `64670`; containers connect to it as `db:5432`.
 
-Stop the stack and preserve database data with `docker compose down`. To delete the Compose database volume and all its data, run `docker compose down -v`.
+To stop the stack and preserve database data:
 
-Compose publishes PostgreSQL on a dynamically assigned host port to avoid conflicts with other local applications. Containers still connect to the database on its internal port `5432`. Run `docker compose ps` to see the assigned host port (for example, `0.0.0.0:49153->5432/tcp`).
-
-For pgAdmin running on the host, register a server with host `127.0.0.1`, the assigned host port shown by `docker compose ps`, maintenance database `mrd_orders`, username `mrd`, and password `mrd-local`. If pgAdmin is itself in the Compose network, use host `db` and port `5432`.
-
-### Run the Postman checks
-
-Import [`postman/Mr-D-Orders.postman_collection.json`](postman/Mr-D-Orders.postman_collection.json) into Postman, start the Compose stack, select the collection, and click **Run**. Keep the requests in their listed order. The collection uses `http://localhost:8000` by default and creates a unique order reference when it runs. Its assertions cover health, order creation, identical retry/idempotency, changed-payload conflict, order details, stock, daily reporting, unknown SKU and invalid-input errors, and missing-resource errors. The worker may update stock between requests, so the stock assertion checks the valid range instead of assuming a timing-specific value.
-
-To change the API address, edit the collection variable `baseUrl` before running it. These are HTTP-level Postman checks; PostgreSQL concurrency and worker replay behavior remain covered by `pytest`.
-
-## Set up PostgreSQL
-
-Create a database named `mrd_orders` and a user with permission to create tables. For example, from `psql` as a database administrator:
-
-```sql
-CREATE USER mrd WITH PASSWORD 'mrd-local';
-CREATE DATABASE mrd_orders OWNER mrd;
+```powershell
+docker compose down
 ```
 
-Copy `.env.example` to `.env` and set `DATABASE_URL`, for example:
+## Run pytest in Docker
 
-```text
-DATABASE_URL=postgresql+psycopg2://mrd:mrd-local@localhost:5432/mrd_orders
-POLL_INTERVAL_SECONDS=1.0
-WORKER_BATCH_SIZE=25
+The tests need a separate PostgreSQL database. Create it once; if it already exists, skip this command:
+
+```powershell
+docker compose up -d db
+docker compose exec db psql -U mrd -d postgres -c "CREATE DATABASE mrd_orders_test OWNER mrd;"
 ```
 
-## Install and initialize
+Build the current API image, then run the tests with the project’s `tests` folder mounted into a temporary container:
 
-```bash
-python -m venv .venv
-# Linux/macOS
-source .venv/bin/activate
-# Windows PowerShell: .venv\Scripts\Activate.ps1
-python -m pip install -r requirements-dev.txt
-python -m scripts.init_db
-python -m scripts.seed
+```powershell
+docker compose build api
+docker compose run --rm --no-deps `
+  -v "${PWD}/tests:/app/tests" `
+  -e TEST_DATABASE_URL="postgresql+psycopg2://mrd:mrd-local@db:5432/mrd_orders_test" `
+  api sh -c "python -m pytest -q -rs /app/tests"
 ```
 
-The schema initializer is safe to repeat. Seeding inserts the three sample products only when each SKU is absent; it does not reset existing stock.
-
-Run the lightweight checks before handing off changes:
-
-```bash
-python -m ruff check app scripts tests
-python -m ruff format --check app scripts tests
-python -m pytest -q
-```
-
-## Run the API and worker
-
-Start each process in its own terminal with the virtual environment activated:
-
-```bash
-uvicorn app.main:app --reload
-```
-
-```bash
-python -m app.outbox.worker
-```
-
-The API is at `http://127.0.0.1:8000`; interactive API docs are at `/docs`.
+Use `db:5432` in this container command. Use `localhost:64670` only when running pytest directly on the host. Test data remains in the dedicated test database.
 
 ## Try the API
 
-```bash
-curl -X POST http://127.0.0.1:8000/orders \
-  -H 'Content-Type: application/json' \
-  -d '{"order_ref":"web-100045","customer_id":"cust-42","items":[{"sku":"BAN-001","qty":2},{"sku":"APL-003","qty":1}]}'
-curl http://127.0.0.1:8000/orders/web-100045
-curl http://127.0.0.1:8000/products/BAN-001/stock
-curl 'http://127.0.0.1:8000/reports/daily?date=2026-10-14'
-curl http://127.0.0.1:8000/health
+Business routes use `/api/v1`. For example, create an order with `POST /api/v1/orders`, look it up with `GET /api/v1/orders/{order_id}`, and check stock with `GET /api/v1/products/{sku}/stock`. The daily report is at `/reports/daily?date=YYYY-MM-DD`.
+
+Import [`postman/Mr-D-Orders.postman_collection.json`](postman/Mr-D-Orders.postman_collection.json) into Postman. Run the **Automated API checks** folder in order with the stack running. Full routes and request/response details are in [API_CONTRACT.md](API_CONTRACT.md).
+
+## Demonstrate worker recovery
+
+With the API and worker running, run the burst demo to show duplicate-order handling:
+
+```powershell
+docker compose exec api python -m scripts.burst_demo
 ```
 
-Prices and totals come from the database. Repeating the same `order_ref` with the same customer and item lines returns the existing order with `duplicate: true`; a changed payload for that reference returns HTTP 409. The API accepts a new order with HTTP 202; an identical duplicate returns HTTP 200. Unknown SKUs and invalid request shapes are rejected for basic operability.
+To demonstrate recovery, stop the worker, submit orders while it is paused, then start it again:
 
-### Errors and recovery
-
-- Invalid request data or an unknown SKU returns HTTP 422; a changed duplicate payload returns HTTP 409; missing orders/products return HTTP 404.
-- Database connection failures return HTTP 503. Other database failures and unexpected API errors return a generic HTTP 500 response; details are written to the server log rather than returned to the caller.
-- Invalid worker settings fail at startup with the setting name and expected type/range. Order requests require 1–100 lines and quantities that fit the database integer column; totals beyond PostgreSQL `BIGINT` return HTTP 422 and the order transaction is rolled back.
-- The worker logs the event ID and order reference for processing failures, leaves failed events unprocessed, and backs off for the configured poll interval before retrying. An insufficient-stock event remains pending and is reported in the worker log.
-- Setup and demo commands exit nonzero with a short explanation when PostgreSQL, the API, or a response is unavailable or invalid.
-
-## Reproduce the two demonstrations
-
-With API and worker running, submit the burst (three unique refs plus a repeat of the first):
-
-```bash
-python -m scripts.burst_demo
+```powershell
+docker compose stop worker
+docker compose exec api python -m scripts.outage_demo
+docker compose start worker
 ```
 
-For the interruption/recovery case, stop the worker with Ctrl+C in its terminal. Leave the API running and run:
-
-```bash
-python -m scripts.outage_demo
-```
-
-The script prints stock before and during the pause and the accepted orders' statuses. Restart the worker:
-
-```bash
-python -m app.outbox.worker
-```
-
-Query the order references printed by the script again; they should reach `STOCK_UPDATED`. The daily report counts accepted orders while processing is paused, while its stock values show the current (possibly lagging) product table.
-
-## Tests
-
-Set `TEST_DATABASE_URL` to a dedicated PostgreSQL test database, then run:
-
-```bash
-python -m pytest -q
-```
-
-The integration checks create sample tables and test products in that database. Use a disposable database because test rows are retained. If no PostgreSQL URL is configured or the server cannot be reached, the PostgreSQL integration tests are skipped; SQLite is deliberately not substituted.
-
-## Design notes
-
-See [SOLUTION.md](SOLUTION.md) for schema, transaction boundaries, event processing, consistency semantics, and scope limits.
-Use [MANUAL_TEST_CHECKLIST.md](MANUAL_TEST_CHECKLIST.md) as the five-minute Postman recording run sheet. [VIDEO_DEMO.md](VIDEO_DEMO.md) contains a longer optional narration guide.
+The Postman collection includes separate pause and recovery folders for this manual scenario. Stop the worker before running the pause folder, then start it and run the recovery folder. The queued order should move from `PENDING_STOCK` to `STOCK_UPDATED` after the worker processes its event.

@@ -1,6 +1,11 @@
+from uuid import UUID
+
 from fastapi import APIRouter, HTTPException, Response
+from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 from app.schemas import OrderAccepted, OrderCreate
+from app.db.models import Order
 
 router = APIRouter()
 
@@ -12,7 +17,27 @@ def _main():
     return main
 
 
-@router.post("/orders", response_model=OrderAccepted, status_code=202)
+def _order_payload(order: Order) -> dict:
+    return {
+        "id": str(order.id),
+        "order_ref": order.order_ref,
+        "customer_id": order.customer_id,
+        "total_cents": order.total_cents,
+        "status": order.status,
+        "created_at": order.created_at,
+        "items": [
+            {
+                "sku": item.sku,
+                "qty": item.quantity,
+                "unit_price_cents": item.unit_price_cents,
+                "line_total_cents": item.line_total_cents,
+            }
+            for item in order.items
+        ],
+    }
+
+
+@router.post("/api/v1/orders", response_model=OrderAccepted, status_code=202)
 def post_order(request: OrderCreate, response: Response):
     main = _main()
     with main.SessionLocal() as session:
@@ -37,11 +62,15 @@ def post_order(request: OrderCreate, response: Response):
     )
 
 
-@router.get("/orders/{order_ref}")
-def read_order(order_ref: str):
+@router.get("/api/v1/orders/{order_id}")
+def read_order_by_id(order_id: UUID):
     main = _main()
     with main.SessionLocal() as session:
-        order = main.get_order(session, order_ref)
+        order = session.scalar(
+            select(Order)
+            .options(joinedload(Order.items))
+            .where(Order.id == order_id)
+        )
         if order is None:
             raise HTTPException(status_code=404, detail="Order not found")
-        return main._order_payload(order)
+        return _order_payload(order)
